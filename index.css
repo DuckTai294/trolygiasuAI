@@ -1,31 +1,18 @@
-/* Global styles */
-* {
-  margin: 0;
-  padding: 0;
+/* Main styles for AI Learning Assistant */
+
+/* Reset and base styles */
+*, *::before, *::after {
   box-sizing: border-box;
 }
 
 html, body {
+  margin: 0;
+  padding: 0;
   width: 100%;
   height: 100%;
-  overflow-x: hidden;
 }
 
 #root {
   width: 100%;
-  min-height: 100vh;
-}
-
-/* Blink Animation for Robot Eyes */
-@keyframes blink {
-  0%, 90%, 100% { opacity: 1; }
-  95% { opacity: 0.3; }
-}
-.animate-blink {
-  animation: blink 3s infinite;
-}
-
-/* Input focus animation */
-.input-interactive:focus {
-  transform: scale(1.01);
+  height: 100%;
 }
