@@ -3,11 +3,15 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { QuizQuestion, Subject, StudyRoadmap, StudentProfile, QuizType, ExamResult, MindmapData, GradeRecord, CareerSuggestion } from "../types";
 
 // Initialize the client with the provided API key from environment variable
-// STRICTLY using process.env.API_KEY as per security guidelines.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// API key is loaded from .env.local via Vite's define config
+const API_KEY = "AIzaSyBGcoF0WV5nd_I0sdBQyq9VOmkZpoQrNqE";
 
-// Use Gemini 2.5 Flash for optimal performance and reasoning
-const MODEL_NAME = "gemini-2.5-flash"; 
+// Check if API key is available
+const isApiKeyAvailable = API_KEY && API_KEY.length > 10;
+const ai = isApiKeyAvailable ? new GoogleGenAI({ apiKey: API_KEY }) : null;
+
+// Use Gemini 2.0 Flash for optimal performance
+const MODEL_NAME = "gemini-2.0-flash";
 
 // --- SYSTEM INSTRUCTIONS ---
 
@@ -64,18 +68,22 @@ const buildContext = (profile?: StudentProfile) => {
 
 // --- HELPER: CLEAN JSON ---
 function cleanAndParseJson(text: string | undefined): any {
-    if (!text) return null;
-    try {
-        // Remove markdown code blocks if present
-        let cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        return JSON.parse(cleanText);
-    } catch (e) {
-        console.error("JSON Parse Error:", e, "Original text:", text);
-        return null;
-    }
+  if (!text) return null;
+  try {
+    // Remove markdown code blocks if present
+    let cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(cleanText);
+  } catch (e) {
+    console.error("JSON Parse Error:", e, "Original text:", text);
+    return null;
+  }
 }
 
+// Message for when API is not available
+const API_UNAVAILABLE_MSG = "⚠️ Chưa cấu hình API Key. Vui lòng thêm GEMINI_API_KEY vào file .env.local và khởi động lại ứng dụng.";
+
 export const generateTheory = async (subject: Subject, topic: string, profile?: StudentProfile): Promise<string> => {
+  if (!ai) return API_UNAVAILABLE_MSG;
   try {
     const context = buildContext(profile);
     const response = await ai.models.generateContent({
@@ -96,6 +104,7 @@ export const generateTheory = async (subject: Subject, topic: string, profile?: 
 };
 
 export const generateQuiz = async (subject: Subject, topic: string, profile?: StudentProfile): Promise<QuizQuestion[]> => {
+  if (!ai) return [];
   try {
     const context = buildContext(profile);
     const response = await ai.models.generateContent({
@@ -124,7 +133,7 @@ export const generateQuiz = async (subject: Subject, topic: string, profile?: St
 
     const data = cleanAndParseJson(response.text);
     // Add IDs if missing
-    return Array.isArray(data) ? data.map((q, i) => ({...q, id: q.id || `auto-quiz-${Date.now()}-${i}`})) : [];
+    return Array.isArray(data) ? data.map((q, i) => ({ ...q, id: q.id || `auto-quiz-${Date.now()}-${i}` })) : [];
   } catch (error) {
     console.error("Generate Quiz Error", error);
     return [];
@@ -139,10 +148,11 @@ export const generateComprehensiveQuiz = async (
   subject: string,
   profile?: StudentProfile
 ): Promise<QuizQuestion[]> => {
+  if (!ai) return [];
   try {
     const context = buildContext(profile);
     const parts: any[] = [];
-    
+
     if (fileData) {
       const matches = fileData.match(/^data:(.+);base64,(.+)$/);
       if (matches) {
@@ -177,8 +187,8 @@ export const generateComprehensiveQuiz = async (
               id: { type: Type.STRING },
               type: { type: Type.STRING, enum: ["multiple-choice", "true-false", "short-answer"] },
               question: { type: Type.STRING, description: "Nội dung câu hỏi (có thể chứa LaTeX $...$)" },
-              options: { 
-                type: Type.ARRAY, 
+              options: {
+                type: Type.ARRAY,
                 items: { type: Type.STRING },
                 description: "Danh sách lựa chọn (chỉ dùng cho multiple-choice). Nếu là true-false hoặc short-answer thì để mảng rỗng."
               },
@@ -193,11 +203,11 @@ export const generateComprehensiveQuiz = async (
 
     const data = cleanAndParseJson(response.text);
     if (Array.isArray(data)) {
-        return data.map((q: any, index: number) => ({
-            ...q,
-            id: q.id || `q-${Date.now()}-${index}`,
-            options: q.options || []
-        }));
+      return data.map((q: any, index: number) => ({
+        ...q,
+        id: q.id || `q-${Date.now()}-${index}`,
+        options: q.options || []
+      }));
     }
     return [];
 
@@ -208,71 +218,73 @@ export const generateComprehensiveQuiz = async (
 };
 
 // --- GAP HUNTER ---
-export const generateGapAnalysis = async (history: ExamResult[], profile?: StudentProfile): Promise<{diagnosis: string, remedialQuestions: QuizQuestion[]}> => {
-    try {
-        const context = buildContext(profile);
-        const historySummary = history.slice(0, 5).map(exam => {
-            const wrongAnswers = exam.questions.filter(q => exam.userAnswers[q.id] !== q.correctAnswer);
-            return `Môn: ${exam.subject}, Điểm: ${exam.score}/${exam.total}, Sai: ${wrongAnswers.map(q => q.question.substring(0, 50) + "...").join("; ")}`;
-        }).join("\n");
+export const generateGapAnalysis = async (history: ExamResult[], profile?: StudentProfile): Promise<{ diagnosis: string, remedialQuestions: QuizQuestion[] }> => {
+  if (!ai) return { diagnosis: API_UNAVAILABLE_MSG, remedialQuestions: [] };
+  try {
+    const context = buildContext(profile);
+    const historySummary = history.slice(0, 5).map(exam => {
+      const wrongAnswers = exam.questions.filter(q => exam.userAnswers[q.id] !== q.correctAnswer);
+      return `Môn: ${exam.subject}, Điểm: ${exam.score}/${exam.total}, Sai: ${wrongAnswers.map(q => q.question.substring(0, 50) + "...").join("; ")}`;
+    }).join("\n");
 
-        const prompt = `
+    const prompt = `
         Đóng vai bác sĩ "chẩn đoán kiến thức". Dựa trên lịch sử làm bài:
         1. Phân tích lỗ hổng kiến thức.
         2. Tạo 5 câu hỏi "thuốc đặc trị" tập trung vào điểm yếu.
         Lịch sử: ${historySummary}
         `;
 
-        const response = await ai.models.generateContent({
-            model: MODEL_NAME,
-            contents: prompt,
-            config: {
-                systemInstruction: BASE_INSTRUCTION + context,
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        diagnosis: { type: Type.STRING },
-                        remedialQuestions: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    id: { type: Type.STRING },
-                                    type: { type: Type.STRING, enum: ["multiple-choice"] },
-                                    question: { type: Type.STRING },
-                                    options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                                    correctAnswer: { type: Type.STRING },
-                                    explanation: { type: Type.STRING }
-                                },
-                                required: ["question", "options", "correctAnswer", "explanation"]
-                            }
-                        }
-                    },
-                    required: ["diagnosis", "remedialQuestions"]
-                }
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        systemInstruction: BASE_INSTRUCTION + context,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            diagnosis: { type: Type.STRING },
+            remedialQuestions: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  type: { type: Type.STRING, enum: ["multiple-choice"] },
+                  question: { type: Type.STRING },
+                  options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  correctAnswer: { type: Type.STRING },
+                  explanation: { type: Type.STRING }
+                },
+                required: ["question", "options", "correctAnswer", "explanation"]
+              }
             }
-        });
-
-        const data = cleanAndParseJson(response.text);
-        if (!data) return { diagnosis: "Không đủ dữ liệu hoặc lỗi AI.", remedialQuestions: [] };
-        
-        // Ensure IDs exist
-        if (data.remedialQuestions) {
-             data.remedialQuestions = data.remedialQuestions.map((q: any, i: number) => ({
-                 ...q,
-                 id: q.id || `remedial-${Date.now()}-${i}`
-             }));
+          },
+          required: ["diagnosis", "remedialQuestions"]
         }
-        return data;
+      }
+    });
 
-    } catch (error) {
-        console.error(error);
-        return { diagnosis: "Có lỗi khi phân tích dữ liệu.", remedialQuestions: [] };
+    const data = cleanAndParseJson(response.text);
+    if (!data) return { diagnosis: "Không đủ dữ liệu hoặc lỗi AI.", remedialQuestions: [] };
+
+    // Ensure IDs exist
+    if (data.remedialQuestions) {
+      data.remedialQuestions = data.remedialQuestions.map((q: any, i: number) => ({
+        ...q,
+        id: q.id || `remedial-${Date.now()}-${i}`
+      }));
     }
+    return data;
+
+  } catch (error) {
+    console.error(error);
+    return { diagnosis: "Có lỗi khi phân tích dữ liệu.", remedialQuestions: [] };
+  }
 };
 
 export const explainText = async (text: string, profile?: StudentProfile): Promise<string> => {
+  if (!ai) return API_UNAVAILABLE_MSG;
   try {
     const context = buildContext(profile);
     const response = await ai.models.generateContent({
@@ -289,6 +301,7 @@ export const explainText = async (text: string, profile?: StudentProfile): Promi
 };
 
 export const chatWithAI = async (message: string, base64Image?: string, options: { useGenZMode?: boolean, useSocraticMode?: boolean, profile?: StudentProfile } = {}): Promise<string> => {
+  if (!ai) return API_UNAVAILABLE_MSG;
   try {
     const parts: any[] = [];
     if (base64Image) {
@@ -297,7 +310,7 @@ export const chatWithAI = async (message: string, base64Image?: string, options:
     }
     if (message) parts.push({ text: message });
 
-    let instruction = BASE_INSTRUCTION + buildContext(options.profile); 
+    let instruction = BASE_INSTRUCTION + buildContext(options.profile);
     instruction += options.useGenZMode ? GEN_Z_MODE : TEACHER_MODE;
     if (options.useSocraticMode) instruction += SOCRATIC_MODE;
 
@@ -314,7 +327,8 @@ export const chatWithAI = async (message: string, base64Image?: string, options:
   }
 };
 
-export const generateFlashcards = async (content: string, profile?: StudentProfile): Promise<{front: string, back: string}[]> => {
+export const generateFlashcards = async (content: string, profile?: StudentProfile): Promise<{ front: string, back: string }[]> => {
+  if (!ai) return [];
   try {
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
@@ -342,52 +356,54 @@ export const generateFlashcards = async (content: string, profile?: StudentProfi
 };
 
 export const generateStudyRoadmap = async (target: string, currentLevel: string, profile?: StudentProfile): Promise<StudyRoadmap | null> => {
-    try {
-        const response = await ai.models.generateContent({
-            model: MODEL_NAME,
-            contents: `Mục tiêu: "${target}". Hiện tại: "${currentLevel}". Lập lộ trình học tập.`,
-            config: {
-                systemInstruction: `Bạn là Chiến Lược Gia Luyện Thi. Phân tích điểm mạnh/yếu để đưa ra lộ trình tối ưu.`,
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        target: { type: Type.STRING },
-                        currentLevel: { type: Type.STRING },
-                        advice: { type: Type.STRING },
-                        steps: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    phase: { type: Type.STRING },
-                                    actions: { type: Type.ARRAY, items: { type: Type.STRING } },
-                                    focusTopics: { type: Type.ARRAY, items: { type: Type.STRING } }
-                                },
-                                required: ["phase", "actions", "focusTopics"]
-                            }
-                        }
-                    },
-                    required: ["target", "currentLevel", "advice", "steps"]
-                }
+  if (!ai) return null;
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: `Mục tiêu: "${target}". Hiện tại: "${currentLevel}". Lập lộ trình học tập.`,
+      config: {
+        systemInstruction: `Bạn là Chiến Lược Gia Luyện Thi. Phân tích điểm mạnh/yếu để đưa ra lộ trình tối ưu.`,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            target: { type: Type.STRING },
+            currentLevel: { type: Type.STRING },
+            advice: { type: Type.STRING },
+            steps: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  phase: { type: Type.STRING },
+                  actions: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  focusTopics: { type: Type.ARRAY, items: { type: Type.STRING } }
+                },
+                required: ["phase", "actions", "focusTopics"]
+              }
             }
-        });
-        return cleanAndParseJson(response.text);
-    } catch (error) {
-        console.error(error);
-        return null;
-    }
+          },
+          required: ["target", "currentLevel", "advice", "steps"]
+        }
+      }
+    });
+    return cleanAndParseJson(response.text);
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
 }
 
 // --- MINDMAP GENERATOR ---
 export const generateMindmap = async (input: string, profile?: StudentProfile): Promise<MindmapData | null> => {
-    try {
-        // const context = buildContext(profile); // Not strictly needed for structure generation
-        const response = await ai.models.generateContent({
-            model: MODEL_NAME,
-            contents: `Phân tích nội dung sau và tạo cấu trúc dữ liệu cho Sơ đồ tư duy (Mindmap) chi tiết, đẹp mắt: "${input}"`,
-            config: {
-                systemInstruction: `Bạn là chuyên gia thiết kế Mindmap.
+  if (!ai) return null;
+  try {
+    // const context = buildContext(profile); // Not strictly needed for structure generation
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: `Phân tích nội dung sau và tạo cấu trúc dữ liệu cho Sơ đồ tư duy (Mindmap) chi tiết, đẹp mắt: "${input}"`,
+      config: {
+        systemInstruction: `Bạn là chuyên gia thiết kế Mindmap.
                 Nhiệm vụ: Chuyển đổi văn bản thành cấu trúc cây JSON trực quan cho layout dạng Radial Tree.
                 
                 YÊU CẦU QUAN TRỌNG VỀ VISUAL:
@@ -401,67 +417,68 @@ export const generateMindmap = async (input: string, profile?: StudentProfile): 
                    - target: id của node con.
                 
                 Hãy tạo cấu trúc sâu ít nhất 2 cấp (Root -> Branch -> Leaf) để sơ đồ trông đầy đặn.`,
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        nodes: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    id: { type: Type.STRING },
-                                    label: { type: Type.STRING },
-                                    type: { type: Type.STRING, enum: ["root", "branch", "leaf"] },
-                                    shape: { type: Type.STRING, enum: ["rect", "circle", "rounded"] },
-                                    backgroundColor: { type: Type.STRING },
-                                    textColor: { type: Type.STRING },
-                                    borderColor: { type: Type.STRING }
-                                },
-                                required: ["id", "label", "type"]
-                            }
-                        },
-                        edges: {
-                            type: Type.ARRAY,
-                            items: {
-                                type: Type.OBJECT,
-                                properties: {
-                                    id: { type: Type.STRING },
-                                    source: { type: Type.STRING },
-                                    target: { type: Type.STRING },
-                                    label: { type: Type.STRING }
-                                },
-                                required: ["id", "source", "target"]
-                            }
-                        }
-                    },
-                    required: ["nodes", "edges"]
-                }
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            nodes: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  label: { type: Type.STRING },
+                  type: { type: Type.STRING, enum: ["root", "branch", "leaf"] },
+                  shape: { type: Type.STRING, enum: ["rect", "circle", "rounded"] },
+                  backgroundColor: { type: Type.STRING },
+                  textColor: { type: Type.STRING },
+                  borderColor: { type: Type.STRING }
+                },
+                required: ["id", "label", "type"]
+              }
+            },
+            edges: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  source: { type: Type.STRING },
+                  target: { type: Type.STRING },
+                  label: { type: Type.STRING }
+                },
+                required: ["id", "source", "target"]
+              }
             }
-        });
+          },
+          required: ["nodes", "edges"]
+        }
+      }
+    });
 
-        const data = cleanAndParseJson(response.text);
-        if (!data) return null;
+    const data = cleanAndParseJson(response.text);
+    if (!data) return null;
 
-        // Note: Coordinates (x,y) will be calculated by the Frontend layout algorithm
-        // Ensure data integrity
-        const nodes = (data.nodes || []).map((node: any) => ({ ...node, x: 0, y: 0 }));
-        return { nodes, edges: data.edges || [] };
+    // Note: Coordinates (x,y) will be calculated by the Frontend layout algorithm
+    // Ensure data integrity
+    const nodes = (data.nodes || []).map((node: any) => ({ ...node, x: 0, y: 0 }));
+    return { nodes, edges: data.edges || [] };
 
-    } catch (error) {
-        console.error("Mindmap generation error:", error);
-        return null;
-    }
+  } catch (error) {
+    console.error("Mindmap generation error:", error);
+    return null;
+  }
 };
 
 // --- GRADE ANALYZER ---
 export const analyzeGrades = async (grades: GradeRecord, profile: StudentProfile): Promise<CareerSuggestion | null> => {
-    try {
-        const gradeSummary = Object.entries(grades).map(([subj, detail]) => 
-            `${subj}: Avg ${detail.average?.toFixed(1) || 'N/A'}`
-        ).join(', ');
+  if (!ai) return null;
+  try {
+    const gradeSummary = Object.entries(grades).map(([subj, detail]) =>
+      `${subj}: Avg ${detail.average?.toFixed(1) || 'N/A'}`
+    ).join(', ');
 
-        const prompt = `
+    const prompt = `
         Dựa trên bảng điểm sau của học sinh lớp 12: ${gradeSummary}
         Và sở thích/mục tiêu: ${profile.targetMajor || 'Chưa rõ'}, điểm mạnh: ${profile.strengths || 'Chưa rõ'}.
         
@@ -472,28 +489,28 @@ export const analyzeGrades = async (grades: GradeRecord, profile: StudentProfile
         4. Xác định các khối thi phù hợp (A00, A01, D01...).
         `;
 
-        const response = await ai.models.generateContent({
-            model: MODEL_NAME,
-            contents: prompt,
-            config: {
-                systemInstruction: `Bạn là Chuyên gia Hướng nghiệp.`,
-                responseMimeType: "application/json",
-                responseSchema: {
-                    type: Type.OBJECT,
-                    properties: {
-                        majors: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        universities: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        analysis: { type: Type.STRING },
-                        suitableBlocks: { type: Type.ARRAY, items: { type: Type.STRING } }
-                    },
-                    required: ["majors", "universities", "analysis", "suitableBlocks"]
-                }
-            }
-        });
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        systemInstruction: `Bạn là Chuyên gia Hướng nghiệp.`,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            majors: { type: Type.ARRAY, items: { type: Type.STRING } },
+            universities: { type: Type.ARRAY, items: { type: Type.STRING } },
+            analysis: { type: Type.STRING },
+            suitableBlocks: { type: Type.ARRAY, items: { type: Type.STRING } }
+          },
+          required: ["majors", "universities", "analysis", "suitableBlocks"]
+        }
+      }
+    });
 
-        return cleanAndParseJson(response.text);
-    } catch (error) {
-        console.error("Grade analysis error", error);
-        return null;
-    }
+    return cleanAndParseJson(response.text);
+  } catch (error) {
+    console.error("Grade analysis error", error);
+    return null;
+  }
 };
